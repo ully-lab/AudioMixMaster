@@ -131,8 +131,8 @@ def mix_audio():
         mixed_audio_buffer = process_audio_files(speech_file, music_file)
         
         # Generate output filename
-        speech_name = secure_filename(speech_file.filename).rsplit('.', 1)[0]
-        music_name = secure_filename(music_file.filename).rsplit('.', 1)[0]
+        speech_name = secure_filename(speech_file.filename or "speech").rsplit('.', 1)[0]
+        music_name = secure_filename(music_file.filename or "music").rsplit('.', 1)[0]
         output_filename = f"mixed_{speech_name}_{music_name}.mp3"
         
         logging.debug(f"Sending mixed audio file: {output_filename}")
