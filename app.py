@@ -136,6 +136,11 @@ def index():
     """Render the upload form."""
     return render_template('index.html')
 
+@app.route('/health')
+def health_check():
+    """Health check endpoint for deployment."""
+    return {'status': 'healthy', 'message': 'Audio Mixer API is running'}, 200
+
 @app.route('/mix', methods=['POST'])
 def mix_audio():
     """
@@ -246,8 +251,13 @@ def internal_error(e):
     return {'error': 'Internal server error'}, 500
 
 with app.app_context():
-    # Create tables if they don't exist
-    db.create_all()
+    # Make sure to import the models here or their tables won't be created
+    try:
+        import models  # noqa: F401
+        db.create_all()
+    except ImportError:
+        # Models file doesn't exist or has import issues, skip table creation
+        pass
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
