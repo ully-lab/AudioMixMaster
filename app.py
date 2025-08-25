@@ -3,8 +3,6 @@ import logging
 import requests
 from io import BytesIO
 from flask import Flask, request, send_file, render_template, flash, redirect, url_for
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy.orm import DeclarativeBase
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 from urllib.parse import urlparse
@@ -13,28 +11,16 @@ from pydub import AudioSegment
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 
-class Base(DeclarativeBase):
-    pass
-
-db = SQLAlchemy(model_class=Base)
 
 # create the app
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET")
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1) # needed for url_for to generate with https
 
-# configure the database, relative to the app instance folder
-app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
-app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
-    "pool_recycle": 300,
-    "pool_pre_ping": True,
-}
 
 # Configure upload settings
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
 
-# initialize the app with the extension, flask-sqlalchemy >= 3.0.x
-db.init_app(app)
 
 # Allowed audio file extensions
 ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'wma'}
@@ -250,21 +236,6 @@ def internal_error(e):
     logging.error(f"Internal server error: {str(e)}")
     return {'error': 'Internal server error'}, 500
 
-with app.app_context():
-    # Make sure to import the models here or their tables won't be created
-    try:
-        import models  # noqa: F401
-        db.create_all()
-        logging.info("Database connection successful and tables created")
-    except ImportError:
-        # Models file doesn't exist or has import issues, skip table creation
-        logging.warning("Models file not found or has import issues, skipping table creation")
-        pass
-    except Exception as e:
-        # Database connection failed, but don't crash the app
-        logging.error(f"Database connection failed: {str(e)}")
-        logging.warning("Application will continue without database functionality")
-        pass
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
