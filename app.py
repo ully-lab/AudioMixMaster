@@ -3,19 +3,38 @@ import logging
 import requests
 from io import BytesIO
 from flask import Flask, request, send_file, render_template, flash, redirect, url_for
-from pydub import AudioSegment
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import DeclarativeBase
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 from urllib.parse import urlparse
+from pydub import AudioSegment
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 
-# Create Flask app
+class Base(DeclarativeBase):
+    pass
+
+db = SQLAlchemy(model_class=Base)
+
+# create the app
 app = Flask(__name__)
-app.secret_key = os.environ.get("SESSION_SECRET", "your-secret-key-here")
+app.secret_key = os.environ.get("SESSION_SECRET")
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1) # needed for url_for to generate with https
+
+# configure the database, relative to the app instance folder
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL")
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_recycle": 300,
+    "pool_pre_ping": True,
+}
 
 # Configure upload settings
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
+
+# initialize the app with the extension, flask-sqlalchemy >= 3.0.x
+db.init_app(app)
 
 # Allowed audio file extensions
 ALLOWED_EXTENSIONS = {'mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'wma'}
@@ -214,6 +233,21 @@ def too_large(e):
         flash(error_msg, 'error')
         return redirect(url_for('index'))
     return {'error': error_msg}, 413
+
+@app.errorhandler(404)
+def not_found(e):
+    """Handle 404 errors."""
+    return render_template('index.html'), 404
+
+@app.errorhandler(500)
+def internal_error(e):
+    """Handle 500 errors."""
+    logging.error(f"Internal server error: {str(e)}")
+    return {'error': 'Internal server error'}, 500
+
+with app.app_context():
+    # Create tables if they don't exist
+    db.create_all()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
