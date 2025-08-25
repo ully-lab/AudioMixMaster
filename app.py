@@ -1,9 +1,11 @@
 import os
 import logging
+import requests
 from io import BytesIO
 from flask import Flask, request, send_file, render_template, flash, redirect, url_for
 from pydub import AudioSegment
 from werkzeug.utils import secure_filename
+from urllib.parse import urlparse
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -22,6 +24,34 @@ def allowed_file(filename):
     """Check if the uploaded file has an allowed extension."""
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def download_audio_from_url(url):
+    """Download audio file from URL and return as BytesIO."""
+    try:
+        logging.debug(f"Downloading audio from URL: {url}")
+        response = requests.get(url, timeout=30, stream=True)
+        response.raise_for_status()
+        
+        # Check content type
+        content_type = response.headers.get('content-type', '')
+        if not any(audio_type in content_type.lower() for audio_type in ['audio', 'mpeg', 'mp3', 'wav', 'ogg']):
+            # Try to validate by URL extension if content-type is unclear
+            parsed_url = urlparse(url)
+            if not any(ext in parsed_url.path.lower() for ext in ['.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac']):
+                raise ValueError(f"URL does not appear to be an audio file: {url}")
+        
+        # Download content to BytesIO
+        audio_buffer = BytesIO()
+        for chunk in response.iter_content(chunk_size=8192):
+            audio_buffer.write(chunk)
+        audio_buffer.seek(0)
+        
+        return audio_buffer
+        
+    except requests.RequestException as e:
+        raise ValueError(f"Failed to download audio from URL {url}: {str(e)}")
+    except Exception as e:
+        raise ValueError(f"Error processing URL {url}: {str(e)}")
 
 def process_audio_files(speech_file, music_file):
     """
@@ -62,7 +92,7 @@ def process_audio_files(speech_file, music_file):
         music = music - 10
         
         # Apply fade-out effect to music
-        fade_duration = min(5000, speech_duration)  # 5 seconds or less if speech is shorter
+        fade_duration = min(2000, speech_duration)  # 2 seconds or less if speech is shorter
         logging.debug(f"Applying {fade_duration}ms fade-out to music...")
         music = music.fade_out(fade_duration)
         
@@ -92,47 +122,69 @@ def mix_audio():
     """
     Mix speech and background music audio files.
     
-    Expects multipart/form-data with:
-    - speech: Speech audio file
-    - music: Background music file
+    Accepts either:
+    - speech_url and music_url: URLs to audio files
+    - speech and music: Uploaded audio files (multipart/form-data)
     
     Returns:
     - Mixed audio as downloadable MP3 file
     """
     try:
-        # Check if files are present in request
-        if 'speech' not in request.files or 'music' not in request.files:
-            if request.content_type and 'multipart/form-data' in request.content_type:
-                flash('Both speech and music files are required.', 'error')
-                return redirect(url_for('index'))
-            return {'error': 'Both speech and music files are required.'}, 400
+        speech_file = None
+        music_file = None
+        speech_name = "speech"
+        music_name = "music"
         
-        speech_file = request.files['speech']
-        music_file = request.files['music']
+        # Check if URLs are provided
+        speech_url = request.form.get('speech_url', '').strip()
+        music_url = request.form.get('music_url', '').strip()
         
-        # Check if files were actually selected
-        if speech_file.filename == '' or music_file.filename == '':
-            if request.content_type and 'multipart/form-data' in request.content_type:
-                flash('Please select both speech and music files.', 'error')
-                return redirect(url_for('index'))
-            return {'error': 'Please select both speech and music files.'}, 400
+        if speech_url and music_url:
+            # URL input mode
+            logging.debug("Using URL input mode")
+            speech_file = download_audio_from_url(speech_url)
+            music_file = download_audio_from_url(music_url)
+            speech_name = urlparse(speech_url).path.split('/')[-1].split('.')[0] or "speech"
+            music_name = urlparse(music_url).path.split('/')[-1].split('.')[0] or "music"
+            
+        else:
+            # File upload mode
+            logging.debug("Using file upload mode")
+            
+            # Check if files are present in request
+            if 'speech' not in request.files or 'music' not in request.files:
+                if request.content_type and 'multipart/form-data' in request.content_type:
+                    flash('Both speech and music files are required.', 'error')
+                    return redirect(url_for('index'))
+                return {'error': 'Both speech and music files are required.'}, 400
+            
+            speech_file = request.files['speech']
+            music_file = request.files['music']
+            
+            # Check if files were actually selected
+            if speech_file.filename == '' or music_file.filename == '':
+                if request.content_type and 'multipart/form-data' in request.content_type:
+                    flash('Please select both speech and music files.', 'error')
+                    return redirect(url_for('index'))
+                return {'error': 'Please select both speech and music files.'}, 400
+            
+            # Validate file types
+            if not (allowed_file(speech_file.filename) and allowed_file(music_file.filename)):
+                error_msg = f'Invalid file type. Allowed types: {", ".join(ALLOWED_EXTENSIONS)}'
+                if request.content_type and 'multipart/form-data' in request.content_type:
+                    flash(error_msg, 'error')
+                    return redirect(url_for('index'))
+                return {'error': error_msg}, 400
+            
+            speech_name = secure_filename(speech_file.filename or "speech").rsplit('.', 1)[0]
+            music_name = secure_filename(music_file.filename or "music").rsplit('.', 1)[0]
         
-        # Validate file types
-        if not (allowed_file(speech_file.filename) and allowed_file(music_file.filename)):
-            error_msg = f'Invalid file type. Allowed types: {", ".join(ALLOWED_EXTENSIONS)}'
-            if request.content_type and 'multipart/form-data' in request.content_type:
-                flash(error_msg, 'error')
-                return redirect(url_for('index'))
-            return {'error': error_msg}, 400
-        
-        logging.debug(f"Processing files: speech={speech_file.filename}, music={music_file.filename}")
+        logging.debug(f"Processing audio: speech={speech_name}, music={music_name}")
         
         # Process audio files
         mixed_audio_buffer = process_audio_files(speech_file, music_file)
         
         # Generate output filename
-        speech_name = secure_filename(speech_file.filename or "speech").rsplit('.', 1)[0]
-        music_name = secure_filename(music_file.filename or "music").rsplit('.', 1)[0]
         output_filename = f"mixed_{speech_name}_{music_name}.mp3"
         
         logging.debug(f"Sending mixed audio file: {output_filename}")
