@@ -255,8 +255,15 @@ with app.app_context():
     try:
         import models  # noqa: F401
         db.create_all()
+        logging.info("Database connection successful and tables created")
     except ImportError:
         # Models file doesn't exist or has import issues, skip table creation
+        logging.warning("Models file not found or has import issues, skipping table creation")
+        pass
+    except Exception as e:
+        # Database connection failed, but don't crash the app
+        logging.error(f"Database connection failed: {str(e)}")
+        logging.warning("Application will continue without database functionality")
         pass
 
 if __name__ == '__main__':
